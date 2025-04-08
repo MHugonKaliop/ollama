@@ -42,6 +42,8 @@ import (
 	"github.com/ollama/ollama/server"
 	"github.com/ollama/ollama/types/model"
 	"github.com/ollama/ollama/version"
+
+	"github.com/newrelic/go-agent/v3/newrelic"
 )
 
 var errModelfileNotFound = errors.New("specified Modelfile wasn't found")
@@ -1087,7 +1089,7 @@ func generate(cmd *cobra.Command, opts runOptions) error {
 	return nil
 }
 
-func RunServer(_ *cobra.Command, _ []string) error {
+func RunServer(app *newrelic.Application, cmd *cobra.Command, args []string) error {
 	if err := initializeKeypair(); err != nil {
 		return err
 	}
@@ -1097,7 +1099,7 @@ func RunServer(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	err = server.Serve(ln)
+	err = server.Serve(ln, app)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
@@ -1202,7 +1204,7 @@ Environment Variables:
 	cmd.SetUsageTemplate(cmd.UsageTemplate() + envUsage)
 }
 
-func NewCLI() *cobra.Command {
+func NewCLI(app *newrelic.Application) *cobra.Command {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	cobra.EnableCommandSorting = false
 
@@ -1283,7 +1285,9 @@ func NewCLI() *cobra.Command {
 		Aliases: []string{"start"},
 		Short:   "Start ollama",
 		Args:    cobra.ExactArgs(0),
-		RunE:    RunServer,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return RunServer(app, cmd, args)
+		},
 	}
 
 	pullCmd := &cobra.Command{

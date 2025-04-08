@@ -6,8 +6,41 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ollama/ollama/cmd"
+
+	"log"
+	"os"
+
+	"github.com/joho/godotenv"
+	"github.com/newrelic/go-agent/v3/newrelic"
 )
 
+func init() {
+	// Load .env file
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalf("Error loading .env file: %v", err)
+	}
+}
+
 func main() {
-	cobra.CheckErr(cmd.NewCLI().ExecuteContext(context.Background()))
+	NewRelicAppName := os.Getenv("NEW_RELIC_APP_NAME")
+	if NewRelicAppName == "" {
+		log.Fatal("Environment variable NEW_RELIC_APP_NAME is not set")
+	}
+
+	NewRelicLicense := os.Getenv("NEW_RELIC_LICENSE")
+	if NewRelicLicense == "" {
+		log.Fatal("Environment variable NEW_RELIC_LICENSE is not set")
+	}
+	// Initialize a New Relic app
+	app, err := newrelic.NewApplication(
+		newrelic.ConfigAppName(NewRelicAppName),
+		newrelic.ConfigLicense(NewRelicLicense),
+	)
+	if err != nil {
+		log.SetFlags(log.LstdFlags | log.Lshortfile)
+		log.Fatal(err)
+	}
+
+	cobra.CheckErr(cmd.NewCLI(app).ExecuteContext(context.Background()))
 }

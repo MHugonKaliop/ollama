@@ -40,6 +40,9 @@ import (
 	"github.com/ollama/ollama/types/errtypes"
 	"github.com/ollama/ollama/types/model"
 	"github.com/ollama/ollama/version"
+
+	"github.com/newrelic/go-agent/v3/integrations/nrgin"
+	"github.com/newrelic/go-agent/v3/newrelic"
 )
 
 func experimentEnabled(name string) bool {
@@ -1140,7 +1143,7 @@ func allowedHostsMiddleware(addr net.Addr) gin.HandlerFunc {
 	}
 }
 
-func (s *Server) GenerateRoutes(rc *ollama.Registry) (http.Handler, error) {
+func (s *Server) GenerateRoutes(rc *ollama.Registry, app *newrelic.Application) (http.Handler, error) {
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowWildcard = true
 	corsConfig.AllowBrowserExtensions = true
@@ -1168,6 +1171,7 @@ func (s *Server) GenerateRoutes(rc *ollama.Registry) (http.Handler, error) {
 	corsConfig.AllowOrigins = envconfig.AllowedOrigins()
 
 	r := gin.Default()
+	r.Use(nrgin.Middleware(app))
 	r.Use(
 		cors.New(corsConfig),
 		allowedHostsMiddleware(s.addr),
@@ -1222,7 +1226,7 @@ func (s *Server) GenerateRoutes(rc *ollama.Registry) (http.Handler, error) {
 	return r, nil
 }
 
-func Serve(ln net.Listener) error {
+func Serve(ln net.Listener, nrApp *newrelic.Application) error {
 	level := slog.LevelInfo
 	if envconfig.Debug() {
 		level = slog.LevelDebug
@@ -1283,7 +1287,7 @@ func Serve(ln net.Listener) error {
 		}
 	}
 
-	h, err := s.GenerateRoutes(rc)
+	h, err := s.GenerateRoutes(rc, app)
 	if err != nil {
 		return err
 	}
