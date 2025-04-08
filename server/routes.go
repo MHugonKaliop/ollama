@@ -1287,7 +1287,7 @@ func Serve(ln net.Listener, nrApp *newrelic.Application) error {
 		}
 	}
 
-	h, err := s.GenerateRoutes(rc, app)
+	h, err := s.GenerateRoutes(rc, nrApp)
 	if err != nil {
 		return err
 	}
