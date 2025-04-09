@@ -10,17 +10,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/joho/godotenv"
 	"github.com/newrelic/go-agent/v3/newrelic"
 )
-
-func init() {
-	// Load .env file
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatalf("Error loading .env file: %v", err)
-	}
-}
 
 func main() {
 	NewRelicAppName := os.Getenv("NEW_RELIC_APP_NAME")
