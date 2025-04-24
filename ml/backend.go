@@ -95,8 +95,18 @@ type Context interface {
 	FromFloatSlice(s []float32, shape ...int) (Tensor, error)
 	FromIntSlice(s []int32, shape ...int) (Tensor, error)
 
+	// Arange creates a 1D tensor with values within an interval (start, stop] increased by step.
+	Arange(start, stop, step float32, dtype DType) Tensor
+
 	Forward(...Tensor) Context
 	Compute(...Tensor)
+
+	// Reserve is analogous to Compute but rather than executing a
+	// graph, simply preallocates memory. Typically called with a
+	// worst case graph to ensure all resources are available for
+	// for future inference.
+	Reserve() error
+
 	MaxGraphNodes() int
 	Close()
 

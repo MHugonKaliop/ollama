@@ -1155,17 +1155,18 @@ func (s *Server) GenerateRoutes(rc *ollama.Registry, app *newrelic.Application) 
 		"X-Requested-With",
 
 		// OpenAI compatibility headers
-		"x-stainless-lang",
-		"x-stainless-package-version",
-		"x-stainless-os",
+		"OpenAI-Beta",
 		"x-stainless-arch",
+		"x-stainless-async",
+		"x-stainless-custom-poll-interval",
+		"x-stainless-helper-method",
+		"x-stainless-lang",
+		"x-stainless-os",
+		"x-stainless-package-version",
+		"x-stainless-poll-helper",
 		"x-stainless-retry-count",
 		"x-stainless-runtime",
 		"x-stainless-runtime-version",
-		"x-stainless-async",
-		"x-stainless-helper-method",
-		"x-stainless-poll-helper",
-		"x-stainless-custom-poll-interval",
 		"x-stainless-timeout",
 	}
 	corsConfig.AllowOrigins = envconfig.AllowedOrigins()

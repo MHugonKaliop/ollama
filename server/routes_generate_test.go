@@ -299,6 +299,9 @@ func TestGenerateChat(t *testing.T) {
 				{Role: "user", Content: "Hello!"},
 			},
 			Stream: &stream,
+			Options: map[string]any{
+				"num_ctx": 1024,
+			},
 		})
 
 		if w.Code != http.StatusOK {
@@ -321,6 +324,9 @@ func TestGenerateChat(t *testing.T) {
 				{Role: "user", Content: "Hello!"},
 			},
 			Stream: &stream,
+			Options: map[string]any{
+				"num_ctx": 1024,
+			},
 		})
 
 		if w.Code != http.StatusOK {
@@ -344,6 +350,9 @@ func TestGenerateChat(t *testing.T) {
 				{Role: "user", Content: "Help me write tests."},
 			},
 			Stream: &stream,
+			Options: map[string]any{
+				"num_ctx": 1024,
+			},
 		})
 
 		if w.Code != http.StatusOK {
@@ -370,19 +379,23 @@ func TestGenerateChat(t *testing.T) {
 					Description: "Get the current weather",
 					Parameters: struct {
 						Type       string   `json:"type"`
+						Defs       any      `json:"$defs,omitempty"`
+						Items      any      `json:"items,omitempty"`
 						Required   []string `json:"required"`
 						Properties map[string]struct {
 							Type        api.PropertyType `json:"type"`
+							Items       any              `json:"items,omitempty"`
 							Description string           `json:"description"`
-							Enum        []string         `json:"enum,omitempty"`
+							Enum        []any            `json:"enum,omitempty"`
 						} `json:"properties"`
 					}{
 						Type:     "object",
 						Required: []string{"location"},
 						Properties: map[string]struct {
 							Type        api.PropertyType `json:"type"`
+							Items       any              `json:"items,omitempty"`
 							Description string           `json:"description"`
-							Enum        []string         `json:"enum,omitempty"`
+							Enum        []any            `json:"enum,omitempty"`
 						}{
 							"location": {
 								Type:        api.PropertyType{"string"},
@@ -390,7 +403,7 @@ func TestGenerateChat(t *testing.T) {
 							},
 							"unit": {
 								Type: api.PropertyType{"string"},
-								Enum: []string{"celsius", "fahrenheit"},
+								Enum: []any{"celsius", "fahrenheit"},
 							},
 						},
 					},
@@ -467,19 +480,23 @@ func TestGenerateChat(t *testing.T) {
 					Description: "Get the current weather",
 					Parameters: struct {
 						Type       string   `json:"type"`
+						Defs       any      `json:"$defs,omitempty"`
+						Items      any      `json:"items,omitempty"`
 						Required   []string `json:"required"`
 						Properties map[string]struct {
 							Type        api.PropertyType `json:"type"`
+							Items       any              `json:"items,omitempty"`
 							Description string           `json:"description"`
-							Enum        []string         `json:"enum,omitempty"`
+							Enum        []any            `json:"enum,omitempty"`
 						} `json:"properties"`
 					}{
 						Type:     "object",
 						Required: []string{"location"},
 						Properties: map[string]struct {
 							Type        api.PropertyType `json:"type"`
+							Items       any              `json:"items,omitempty"`
 							Description string           `json:"description"`
-							Enum        []string         `json:"enum,omitempty"`
+							Enum        []any            `json:"enum,omitempty"`
 						}{
 							"location": {
 								Type:        api.PropertyType{"string"},
@@ -487,7 +504,7 @@ func TestGenerateChat(t *testing.T) {
 							},
 							"unit": {
 								Type: api.PropertyType{"string"},
-								Enum: []string{"celsius", "fahrenheit"},
+								Enum: []any{"celsius", "fahrenheit"},
 							},
 						},
 					},
