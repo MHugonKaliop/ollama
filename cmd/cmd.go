@@ -1411,7 +1411,6 @@ func NewCLI(app *newrelic.Application) *cobra.Command {
 				envVars["OLLAMA_LLM_LIBRARY"],
 				envVars["OLLAMA_GPU_OVERHEAD"],
 				envVars["OLLAMA_LOAD_TIMEOUT"],
-				envVars["OLLAMA_CONTEXT_LENGTH"],
 			})
 		default:
 			appendEnvDocs(cmd, envs)

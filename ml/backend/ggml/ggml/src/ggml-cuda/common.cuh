@@ -78,13 +78,13 @@
 // Moore Threads
 #define GGML_CUDA_MUSA_ARCH_IS_QY1 (__MUSA_ARCH__ <= 210)
 
-#define GGML_CUDA_CC_QY1  (GGML_MUSA_CC_OFFSET_MTHREADS + 0x210) // MTT S80, MTT S3000
-#define GGML_CUDA_CC_QY2  (GGML_MUSA_CC_OFFSET_MTHREADS + 0x220) // MTT S4000
-#define GGML_CUDA_CC_NG   (GGML_MUSA_CC_OFFSET_MTHREADS + 0x310) // TBD
+#define GGML_CUDA_CC_QY1  (GGML_CUDA_CC_OFFSET_MTHREADS + 0x210) // MTT S80, MTT S3000
+#define GGML_CUDA_CC_QY2  (GGML_CUDA_CC_OFFSET_MTHREADS + 0x220) // MTT S4000
+#define GGML_CUDA_CC_NG   (GGML_CUDA_CC_OFFSET_MTHREADS + 0x310) // TBD
 
 #define GGML_CUDA_CC_IS_MTHREADS(cc) (cc >= GGML_CUDA_CC_OFFSET_MTHREADS && cc < GGML_CUDA_CC_OFFSET_AMD)
 #define GGML_CUDA_CC_IS_QY1(cc)      (cc >= GGML_CUDA_CC_QY1 && cc < GGML_CUDA_CC_QY2)
-#define GGML_CUDA_CC_IS_QY2(cc)      (cc >= GGML_CUDA_CC_QY2 && cc < GGML_CUDA_CC_NEXT)
+#define GGML_CUDA_CC_IS_QY2(cc)      (cc >= GGML_CUDA_CC_QY2 && cc < GGML_CUDA_CC_NG)
 #define GGML_CUDA_CC_IS_NG(cc)       (cc >= GGML_CUDA_CC_NG)
 
 #ifdef __CUDA_ARCH_LIST__
@@ -729,7 +729,13 @@ struct ggml_cuda_graph {
     bool disable_due_to_failed_graph_capture = false;
     int number_consecutive_updates = 0;
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
-    std::vector<char **> updated_kernel_arg;
+    bool use_cpy_indirection = false;
+    std::vector<char *> cpy_dest_ptrs;
+    char ** dest_ptrs_d;
+    int dest_ptrs_size = 0;
+    // Index to allow each cpy kernel to be aware of it's position within the graph
+    // relative to other cpy nodes.
+    int graph_cpynode_index = -1;
 #endif
 };
 
