@@ -39,7 +39,17 @@ func (f Modelfile) String() string {
 	return sb.String()
 }
 
-var deprecatedParameters = []string{"penalize_newline"}
+var deprecatedParameters = []string{
+	"penalize_newline",
+	"low_vram",
+	"f16_kv",
+	"logits_all",
+	"vocab_only",
+	"use_mlock",
+	"mirostat",
+	"mirostat_tau",
+	"mirostat_eta",
+}
 
 // CreateRequest creates a new *api.CreateRequest from an existing Modelfile
 func (f Modelfile) CreateRequest(relativeDir string) (*api.CreateRequest, error) {
