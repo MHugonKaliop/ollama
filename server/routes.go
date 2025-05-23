@@ -144,6 +144,11 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 		return
 	}
 
+	// Set the model name in New Relic
+	if tx := newrelic.FromContext(c.Request.Context()); tx != nil {
+		tx.AddAttribute("model.name", req.Model)
+	}
+
 	// We cannot currently consolidate this into GetModel because all we'll
 	// induce infinite recursion given the current code structure.
 	name, err := getExistingName(name)
