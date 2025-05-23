@@ -1409,6 +1409,11 @@ func (s *Server) ChatHandler(c *gin.Context) {
 		return
 	}
 
+	// Set the model name in New Relic
+	if tx := newrelic.FromContext(c.Request.Context()); tx != nil {
+		tx.AddAttribute("model.name", req.Model)
+	}
+
 	// expire the runner
 	if len(req.Messages) == 0 && req.KeepAlive != nil && int(req.KeepAlive.Seconds()) == 0 {
 		model, err := GetModel(req.Model)
