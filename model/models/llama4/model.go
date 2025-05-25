@@ -40,13 +40,13 @@ func New(c fs.Config) (model.Model, error) {
 				Values: c.Strings("tokenizer.ggml.tokens"),
 				Types:  c.Ints("tokenizer.ggml.token_type"),
 				Merges: c.Strings("tokenizer.ggml.merges"),
-				BOS:    int32(c.Uint("tokenizer.ggml.bos_token_id")),
 				AddBOS: c.Bool("tokenizer.ggml.add_bos_token", true),
-				EOS:    int32(c.Uint("tokenizer.ggml.eos_token_id")),
+				BOS:    []int32{int32(c.Uint("tokenizer.ggml.bos_token_id"))},
 				AddEOS: c.Bool("tokenizer.ggml.add_eos_token", false),
-				// TODO: set EOT to EOS otherwise 0 will stop generation
-				EOT:    int32(c.Uint("tokenizer.ggml.eos_token_id")),
-				AddEOT: c.Bool("tokenizer.ggml.add_eos_token", false),
+				EOS: append(
+					[]int32{int32(c.Uint("tokenizer.ggml.eos_token_id"))},
+					c.Ints("tokenizer.ggml.eos_token_ids")...,
+				),
 			},
 		),
 		ImageProcessor: newImageProcessor(c),
@@ -77,10 +77,7 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) ([]input
 		return nil, err
 	}
 
-	tilesLocal, err := ctx.Input().FromFloatSlice(pixelsLocal, size.X, size.Y, m.numChannels)
-	if err != nil {
-		return nil, err
-	}
+	tilesLocal := ctx.Input().FromFloatSlice(pixelsLocal, size.X, size.Y, m.numChannels)
 
 	ratioW, ratioH := size.X/m.imageSize, size.Y/m.imageSize
 
@@ -91,11 +88,7 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) ([]input
 	pixelValues := tilesLocal
 
 	if len(pixelsGlobal) > 0 {
-		tilesGlobal, err := ctx.Input().FromFloatSlice(pixelsGlobal, m.imageSize, m.imageSize, m.numChannels)
-		if err != nil {
-			return nil, err
-		}
-
+		tilesGlobal := ctx.Input().FromFloatSlice(pixelsGlobal, m.imageSize, m.imageSize, m.numChannels)
 		pixelValues = pixelValues.Concat(ctx, tilesGlobal, 3)
 	}
 
@@ -182,15 +175,8 @@ func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
 }
 
 func (m *Model) Forward(ctx ml.Context, batch input.Batch) (ml.Tensor, error) {
-	positions, err := ctx.Input().FromIntSlice(batch.Positions, len(batch.Positions))
-	if err != nil {
-		return nil, err
-	}
-
-	outputs, err := ctx.Input().FromIntSlice(batch.Outputs, len(batch.Outputs))
-	if err != nil {
-		return nil, err
-	}
+	positions := ctx.Input().FromIntSlice(batch.Positions, len(batch.Positions))
+	outputs := ctx.Input().FromIntSlice(batch.Outputs, len(batch.Outputs))
 
 	return m.TextModel.Forward(ctx, batch.Inputs, positions, outputs, batch, m.Cache), nil
 }

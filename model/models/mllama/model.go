@@ -38,13 +38,13 @@ func New(c fs.Config) (model.Model, error) {
 				Values: c.Strings("tokenizer.ggml.tokens"),
 				Types:  c.Ints("tokenizer.ggml.token_type"),
 				Merges: c.Strings("tokenizer.ggml.merges"),
-				BOS:    int32(c.Uint("tokenizer.ggml.bos_token_id")),
 				AddBOS: c.Bool("tokenizer.ggml.add_bos_token", true),
-				EOS:    int32(c.Uint("tokenizer.ggml.eos_token_id")),
+				BOS:    []int32{int32(c.Uint("tokenizer.ggml.bos_token_id"))},
 				AddEOS: c.Bool("tokenizer.ggml.add_eos_token", false),
-				// TODO: set EOT to EOS otherwise 0 will stop generation
-				EOT:    int32(c.Uint("tokenizer.ggml.eos_token_id")),
-				AddEOT: c.Bool("tokenizer.ggml.add_eos_token", false),
+				EOS: append(
+					[]int32{int32(c.Uint("tokenizer.ggml.eos_token_id"))},
+					c.Ints("tokenizer.ggml.eos_token_ids")...,
+				),
 			},
 		),
 		ImageProcessor: newImageProcessor(c),
@@ -80,15 +80,8 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) ([]input
 		f32s = f32s[:m.imageSize*m.imageSize*m.numChannels*m.maxNumTiles]
 	}
 
-	pixelValues, err := ctx.Input().FromFloatSlice(f32s, m.imageSize, m.imageSize, m.numChannels, m.maxNumTiles)
-	if err != nil {
-		return nil, err
-	}
-
-	aspectRatio, err := ctx.Input().FromIntSlice([]int32{int32(ratio.rank)}, 1)
-	if err != nil {
-		return nil, err
-	}
+	pixelValues := ctx.Input().FromFloatSlice(f32s, m.imageSize, m.imageSize, m.numChannels, m.maxNumTiles)
+	aspectRatio := ctx.Input().FromIntSlice([]int32{int32(ratio.rank)}, 1)
 
 	positionIDs := ctx.Arange(0, 1601, 1, ml.DTypeI32)
 	crossAttentionStates := m.VisionModel.Forward(ctx, pixelValues, positionIDs, aspectRatio)
@@ -113,15 +106,8 @@ func (m *Model) Forward(ctx ml.Context, batch input.Batch) (ml.Tensor, error) {
 		crossAttentionStates = batch.Multimodal[len(batch.Multimodal)-1].Multimodal[0].Tensor
 	}
 
-	positions, err := ctx.Input().FromIntSlice(batch.Positions, len(batch.Positions))
-	if err != nil {
-		return nil, err
-	}
-
-	outputs, err := ctx.Input().FromIntSlice(batch.Outputs, len(batch.Outputs))
-	if err != nil {
-		return nil, err
-	}
+	positions := ctx.Input().FromIntSlice(batch.Positions, len(batch.Positions))
+	outputs := ctx.Input().FromIntSlice(batch.Outputs, len(batch.Outputs))
 
 	// TODO: attention mask, cross attention mask
 	return m.TextModel.Forward(ctx, batch.Inputs, positions, outputs, crossAttentionStates, nil, m.Cache.(*kvcache.WrapperCache)), nil

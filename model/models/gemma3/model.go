@@ -60,12 +60,16 @@ func New(c fs.Config) (model.Model, error) {
 				Values: c.Strings("tokenizer.ggml.tokens"),
 				Scores: c.Floats("tokenizer.ggml.scores"),
 				Types:  c.Ints("tokenizer.ggml.token_type"),
-				BOS:    int32(c.Uint("tokenizer.ggml.bos_token_id")),
 				AddBOS: c.Bool("tokenizer.ggml.add_bos_token", true),
-				EOS:    int32(1),
+				BOS:    []int32{int32(c.Uint("tokenizer.ggml.bos_token_id"))},
 				AddEOS: c.Bool("tokenizer.ggml.add_eos_token", false),
-				EOT:    int32(106),
-				AddEOT: c.Bool("tokenizer.ggml.add_eot_token", false),
+				EOS: append(
+					[]int32{
+						int32(c.Uint("tokenizer.ggml.eos_token_id")),
+						int32(c.Uint("tokenizer.ggml.eot_token_id", 106)),
+					},
+					c.Ints("tokenizer.ggml.eos_token_ids")...,
+				),
 			},
 		),
 		ImageProcessor: newImageProcessor(c),
@@ -97,14 +101,11 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) ([]input
 		return nil, err
 	}
 
-	pixelValues, err := ctx.Input().FromFloatSlice(f32s,
+	pixelValues := ctx.Input().FromFloatSlice(f32s,
 		m.ImageProcessor.imageSize,
 		m.ImageProcessor.imageSize,
 		m.ImageProcessor.numChannels,
 	)
-	if err != nil {
-		return nil, err
-	}
 
 	visionOutputs := m.VisionModel.Forward(ctx, pixelValues)
 	visionOutputs = m.MultiModalProjector.Forward(ctx, visionOutputs, m.imageSize, m.patchSize, m.VisionModel.eps)
@@ -140,15 +141,8 @@ func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
 }
 
 func (m *Model) Forward(ctx ml.Context, batch input.Batch) (ml.Tensor, error) {
-	positions, err := ctx.Input().FromIntSlice(batch.Positions, len(batch.Positions))
-	if err != nil {
-		return nil, err
-	}
-
-	outputs, err := ctx.Input().FromIntSlice(batch.Outputs, len(batch.Outputs))
-	if err != nil {
-		return nil, err
-	}
+	positions := ctx.Input().FromIntSlice(batch.Positions, len(batch.Positions))
+	outputs := ctx.Input().FromIntSlice(batch.Outputs, len(batch.Outputs))
 
 	return m.TextModel.Forward(ctx, batch.Inputs, positions, outputs, batch, m.Cache), nil
 }

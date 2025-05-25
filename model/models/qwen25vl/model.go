@@ -34,12 +34,13 @@ func New(c fs.Config) (model.Model, error) {
 				Values: c.Strings("tokenizer.ggml.tokens"),
 				Types:  c.Ints("tokenizer.ggml.token_type"),
 				Merges: c.Strings("tokenizer.ggml.merges"),
-				BOS:    int32(c.Uint("tokenizer.ggml.bos_token_id")),
-				AddBOS: c.Bool("tokenizer.ggml.add_bos_token", false),
-				EOS:    int32(c.Uint("tokenizer.ggml.eos_token_id")),
+				AddBOS: c.Bool("tokenizer.ggml.add_bos_token", true),
+				BOS:    []int32{int32(c.Uint("tokenizer.ggml.bos_token_id"))},
 				AddEOS: c.Bool("tokenizer.ggml.add_eos_token", false),
-				EOT:    int32(c.Uint("tokenizer.ggml.eos_token_id")),
-				AddEOT: c.Bool("tokenizer.ggml.add_eos_token", false),
+				EOS: append(
+					[]int32{int32(c.Uint("tokenizer.ggml.eos_token_id"))},
+					c.Ints("tokenizer.ggml.eos_token_ids")...,
+				),
 			},
 		),
 		TextModel:      NewTextModel(c),
@@ -68,10 +69,7 @@ func (m *Model) PixelValues(ctx ml.Context, multimodalData []byte) (ml.Tensor, *
 		m.ImageProcessor.patchSize * m.ImageProcessor.patchSize
 	numPatches := grid.Temporal * grid.Height * grid.Width
 
-	pixelValues, err := ctx.Input().FromFloatSlice(f32s, patchDim, numPatches)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create tensor from image: %w", err)
-	}
+	pixelValues := ctx.Input().FromFloatSlice(f32s, patchDim, numPatches)
 
 	return pixelValues, grid, nil
 }
@@ -120,13 +118,14 @@ func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
 			patchesPerChunk := inp.Multimodal[0].Tensor.Dim(1)
 
 			// First add the vision start token
-			result = append(result, input.Input{Token: visionStartToken, SameBatch: patchesPerChunk + 1})
+			result = append(result, input.Input{Token: visionStartToken})
 
 			// Add the image token with the multimodal tensor data at the first position
 			result = append(result, input.Input{
 				Token:          imageToken,
 				Multimodal:     inp.Multimodal,
 				MultimodalHash: inp.MultimodalHash,
+				SameBatch:      patchesPerChunk,
 			})
 
 			// Add the placeholder tokens for the remaining positions (tokensPerGrid-1)
@@ -140,15 +139,8 @@ func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
 }
 
 func (m *Model) Forward(ctx ml.Context, batch input.Batch) (ml.Tensor, error) {
-	positions, err := ctx.Input().FromIntSlice(batch.Positions, len(batch.Positions))
-	if err != nil {
-		return nil, err
-	}
-
-	outputs, err := ctx.Input().FromIntSlice(batch.Outputs, len(batch.Outputs))
-	if err != nil {
-		return nil, err
-	}
+	positions := ctx.Input().FromIntSlice(batch.Positions, len(batch.Positions))
+	outputs := ctx.Input().FromIntSlice(batch.Outputs, len(batch.Outputs))
 
 	return m.TextModel.Forward(ctx, batch.Inputs, positions, outputs, batch, m.Cache)
 }
