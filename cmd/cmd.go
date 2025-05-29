@@ -39,6 +39,7 @@ import (
 	"github.com/ollama/ollama/format"
 	"github.com/ollama/ollama/parser"
 	"github.com/ollama/ollama/progress"
+	"github.com/ollama/ollama/readline"
 	"github.com/ollama/ollama/runner"
 	"github.com/ollama/ollama/server"
 	"github.com/ollama/ollama/types/model"
@@ -47,6 +48,23 @@ import (
 
 	"github.com/newrelic/go-agent/v3/newrelic"
 )
+
+// ensureThinkingSupport emits a warning if the model does not advertise thinking support
+func ensureThinkingSupport(ctx context.Context, client *api.Client, name string) {
+	if name == "" {
+		return
+	}
+	resp, err := client.Show(ctx, &api.ShowRequest{Model: name})
+	if err != nil {
+		return
+	}
+	for _, cap := range resp.Capabilities {
+		if cap == model.CapabilityThinking {
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "warning: model %q does not support thinking output\n", name)
+}
 
 var errModelfileNotFound = errors.New("specified Modelfile wasn't found")
 
@@ -267,6 +285,9 @@ func loadOrUnloadModel(cmd *cobra.Command, opts *runOptions) error {
 	req := &api.GenerateRequest{
 		Model:     opts.Model,
 		KeepAlive: opts.KeepAlive,
+
+		// pass Think here so we fail before getting to the chat prompt if the model doesn't support it
+		Think: opts.Think,
 	}
 
 	return client.Generate(cmd.Context(), req, func(api.GenerateResponse) error { return nil })
@@ -300,6 +321,22 @@ func RunHandler(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	opts.Format = format
+
+	thinkFlag := cmd.Flags().Lookup("think")
+	if thinkFlag.Changed {
+		think, err := cmd.Flags().GetBool("think")
+		if err != nil {
+			return err
+		}
+		opts.Think = &think
+	} else {
+		opts.Think = nil
+	}
+	hidethinking, err := cmd.Flags().GetBool("hidethinking")
+	if err != nil {
+		return err
+	}
+	opts.HideThinking = hidethinking
 
 	keepAlive, err := cmd.Flags().GetString("keepalive")
 	if err != nil {
@@ -360,6 +397,11 @@ func RunHandler(cmd *cobra.Command, args []string) error {
 		}
 		return info, err
 	}()
+	if err != nil {
+		return err
+	}
+
+	opts.Think, err = inferThinkingOption(&info.Capabilities, &opts, thinkFlag.Changed)
 	if err != nil {
 		return err
 	}
@@ -925,17 +967,19 @@ func PullHandler(cmd *cobra.Command, args []string) error {
 type generateContextKey string
 
 type runOptions struct {
-	Model       string
-	ParentModel string
-	Prompt      string
-	Messages    []api.Message
-	WordWrap    bool
-	Format      string
-	System      string
-	Images      []api.ImageData
-	Options     map[string]any
-	MultiModal  bool
-	KeepAlive   *api.Duration
+	Model        string
+	ParentModel  string
+	Prompt       string
+	Messages     []api.Message
+	WordWrap     bool
+	Format       string
+	System       string
+	Images       []api.ImageData
+	Options      map[string]any
+	MultiModal   bool
+	KeepAlive    *api.Duration
+	Think        *bool
+	HideThinking bool
 }
 
 type displayResponseState struct {
@@ -991,6 +1035,26 @@ func displayResponse(content string, wordWrap bool, state *displayResponseState)
 	}
 }
 
+func thinkingOutputOpeningText(plainText bool) string {
+	text := "Thinking...\n"
+
+	if plainText {
+		return text
+	}
+
+	return readline.ColorGrey + readline.ColorBold + text + readline.ColorDefault + readline.ColorGrey
+}
+
+func thinkingOutputClosingText(plainText bool) string {
+	text := "...done thinking.\n\n"
+
+	if plainText {
+		return text
+	}
+
+	return readline.ColorGrey + readline.ColorBold + text + readline.ColorDefault
+}
+
 func chat(cmd *cobra.Command, opts runOptions) (*api.Message, error) {
 	client, err := api.ClientFromEnvironment()
 	if err != nil {
@@ -1018,14 +1082,34 @@ func chat(cmd *cobra.Command, opts runOptions) (*api.Message, error) {
 	var latest api.ChatResponse
 	var fullResponse strings.Builder
 	var role string
+	var thinkTagOpened bool = false
+	var thinkTagClosed bool = false
 
 	fn := func(response api.ChatResponse) error {
-		p.StopAndClear()
+		if response.Message.Content != "" || !opts.HideThinking {
+			p.StopAndClear()
+		}
 
 		latest = response
 
 		role = response.Message.Role
+		if response.Message.Thinking != "" && !opts.HideThinking {
+			if !thinkTagOpened {
+				fmt.Print(thinkingOutputOpeningText(false))
+				thinkTagOpened = true
+			}
+			displayResponse(response.Message.Thinking, opts.WordWrap, state)
+		}
+
 		content := response.Message.Content
+		if thinkTagOpened && !thinkTagClosed && content != "" {
+			fmt.Print(thinkingOutputClosingText(false))
+			thinkTagClosed = true
+		}
+		// purposefully not putting thinking blocks in the response, which would
+		// only be needed if we later added tool calling to the cli (they get
+		// filtered out anyway since current models don't expect them unless you're
+		// about to finish some tool calls)
 		fullResponse.WriteString(content)
 
 		displayResponse(content, opts.WordWrap, state)
@@ -1042,6 +1126,7 @@ func chat(cmd *cobra.Command, opts runOptions) (*api.Message, error) {
 		Messages: opts.Messages,
 		Format:   json.RawMessage(opts.Format),
 		Options:  opts.Options,
+		Think:    opts.Think,
 	}
 
 	if opts.KeepAlive != nil {
@@ -1103,12 +1188,31 @@ func generate(cmd *cobra.Command, opts runOptions) error {
 	}()
 
 	var state *displayResponseState = &displayResponseState{}
+	var thinkTagOpened bool = false
+	var thinkTagClosed bool = false
+
+	plainText := !term.IsTerminal(int(os.Stdout.Fd()))
 
 	fn := func(response api.GenerateResponse) error {
-		p.StopAndClear()
-
 		latest = response
 		content := response.Response
+
+		if response.Response != "" || !opts.HideThinking {
+			p.StopAndClear()
+		}
+
+		if response.Thinking != "" && !opts.HideThinking {
+			if !thinkTagOpened {
+				fmt.Print(thinkingOutputOpeningText(plainText))
+				thinkTagOpened = true
+			}
+			displayResponse(response.Thinking, opts.WordWrap, state)
+		}
+
+		if thinkTagOpened && !thinkTagClosed && content != "" {
+			fmt.Print(thinkingOutputClosingText(plainText))
+			thinkTagClosed = true
+		}
 
 		displayResponse(content, opts.WordWrap, state)
 
@@ -1135,6 +1239,7 @@ func generate(cmd *cobra.Command, opts runOptions) error {
 		System:    opts.System,
 		Options:   opts.Options,
 		KeepAlive: opts.KeepAlive,
+		Think:     opts.Think,
 	}
 
 	if err := client.Generate(ctx, &request, fn); err != nil {
@@ -1350,6 +1455,8 @@ func NewCLI(app *newrelic.Application) *cobra.Command {
 	runCmd.Flags().Bool("insecure", false, "Use an insecure registry")
 	runCmd.Flags().Bool("nowordwrap", false, "Don't wrap words to the next line automatically")
 	runCmd.Flags().String("format", "", "Response format (e.g. json)")
+	runCmd.Flags().Bool("think", false, "Whether to use thinking mode for supported models")
+	runCmd.Flags().Bool("hidethinking", false, "Hide thinking output (if provided)")
 
 	stopCmd := &cobra.Command{
 		Use:     "stop MODEL",
@@ -1403,7 +1510,6 @@ func NewCLI(app *newrelic.Application) *cobra.Command {
 		PreRunE: checkServerHeartbeat,
 		RunE:    ListRunningHandler,
 	}
-
 	copyCmd := &cobra.Command{
 		Use:     "cp SOURCE DESTINATION",
 		Short:   "Copy a model",
@@ -1491,4 +1597,46 @@ func NewCLI(app *newrelic.Application) *cobra.Command {
 	)
 
 	return rootCmd
+}
+
+// If the user has explicitly set thinking options, either through the CLI or
+// through the `/set think` or `set nothink` interactive options, then we
+// respect them. Otherwise, we check model capabilities to see if the model
+// supports thinking. If the model does support thinking, we enable it.
+// Otherwise, we unset the thinking option (which is different than setting it
+// to false).
+//
+// If capabilities are not provided, we fetch them from the server.
+func inferThinkingOption(caps *[]model.Capability, runOpts *runOptions, explicitlySetByUser bool) (*bool, error) {
+	if explicitlySetByUser {
+		return runOpts.Think, nil
+	}
+
+	if caps == nil {
+		client, err := api.ClientFromEnvironment()
+		if err != nil {
+			return nil, err
+		}
+		ret, err := client.Show(context.Background(), &api.ShowRequest{
+			Model: runOpts.Model,
+		})
+		if err != nil {
+			return nil, err
+		}
+		caps = &ret.Capabilities
+	}
+
+	thinkingSupported := false
+	for _, cap := range *caps {
+		if cap == model.CapabilityThinking {
+			thinkingSupported = true
+		}
+	}
+
+	if thinkingSupported {
+		thinking := true
+		return &thinking, nil
+	}
+
+	return nil, nil
 }
