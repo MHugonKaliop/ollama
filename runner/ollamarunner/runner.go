@@ -17,7 +17,6 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +31,7 @@ import (
 	"github.com/ollama/ollama/llm"
 	"github.com/ollama/ollama/logutil"
 	"github.com/ollama/ollama/ml"
+	"github.com/ollama/ollama/ml/nn/pooling"
 	"github.com/ollama/ollama/model"
 	"github.com/ollama/ollama/model/input"
 	"github.com/ollama/ollama/runner/common"
@@ -405,6 +405,8 @@ func (s *Server) removeSequence(seqIndex int, reason llm.DoneReason) {
 func (s *Server) run(ctx context.Context) {
 	s.ready.Wait()
 
+	supportsAsync := pooling.Type(s.model.Backend().Config().Uint("pooling_type")) == pooling.TypeNone
+
 	var activeBatch batchState
 	for {
 		select {
@@ -418,7 +420,12 @@ func (s *Server) run(ctx context.Context) {
 			if err != nil {
 				panic(err)
 			}
-			go s.computeBatch(activeBatch)
+
+			if supportsAsync {
+				go s.computeBatch(activeBatch)
+			} else {
+				s.computeBatch(activeBatch)
+			}
 		}
 	}
 }
@@ -429,12 +436,12 @@ func (s *Server) forwardBatch(pendingBatch batchState) (nextBatch batchState, er
 	// before setting up the next batch so the seqs inputs are ready to receive their
 	// token values and we get the correct input pointers for the batchInputs
 	if pendingBatch.ctx != nil {
-		slog.Log(context.TODO(), logutil.LevelTrace, "forwardBatch waiting for compute to start", "pendingBatch.id", pendingBatch.id)
+		logutil.Trace("forwardBatch waiting for compute to start", "pendingBatch.id", pendingBatch.id)
 		<-pendingBatch.computeStartedCh
-		slog.Log(context.TODO(), logutil.LevelTrace, "forwardBatch compute started, setting up next batch", "pendingBatch.id", pendingBatch.id, "id", s.batchID)
+		logutil.Trace("forwardBatch compute started, setting up next batch", "pendingBatch.id", pendingBatch.id, "id", s.batchID)
 		nextBatch.inputsReadyCh = pendingBatch.outputsReadyCh // Chain the ouputs from the pending batch to the next inputs batch
 	} else {
-		slog.Log(context.TODO(), logutil.LevelTrace, "forwardBatch no pending batch detected", "batchID", s.batchID)
+		logutil.Trace("forwardBatch no pending batch detected", "batchID", s.batchID)
 		// No pendingBatch, so the inputs will be ready in the seqs immediately
 		nextBatch.inputsReadyCh = make(chan struct{}, 1)
 		nextBatch.inputsReadyCh <- struct{}{}
@@ -460,6 +467,7 @@ func (s *Server) forwardBatch(pendingBatch batchState) (nextBatch batchState, er
 
 	// Prepare the seqs and batch, but defer the input token values as we may not be ready yet
 	var batchInputs []*input.Input
+	var batchOutputs []int32
 	var batch input.Batch
 
 	resumeSeq := -1
@@ -542,11 +550,11 @@ func (s *Server) forwardBatch(pendingBatch batchState) (nextBatch batchState, er
 			batch.Positions = append(batch.Positions, int32(len(seq.cache.Inputs)+len(seq.pendingInputs)))
 			batch.Sequences = append(batch.Sequences, seq.cache.Id)
 
-			seq.iBatch = len(batch.Outputs)
-			if i+1 == len(seq.inputs) {
-				batch.Outputs = append(batch.Outputs, int32(len(batchInputs)-1))
+			seq.iBatch = len(batchOutputs)
+			if i+1 == len(seq.inputs) || seq.embeddingOnly {
+				batchOutputs = append(batchOutputs, int32(len(batchInputs)-1))
 			}
-			slog.Log(context.TODO(), logutil.LevelTrace, "forwardBatch iBatch", "batchID", s.batchID, "seqIdx", seqIdx, "seq.iBatch", seq.iBatch, "i+1", i+1, "len(seq.inputs)", len(seq.inputs))
+			logutil.Trace("forwardBatch iBatch", "batchID", s.batchID, "seqIdx", seqIdx, "seq.iBatch", seq.iBatch, "i+1", i+1, "len(seq.inputs)", len(seq.inputs))
 			seq.pendingInputs = append(seq.pendingInputs, inp)
 		}
 
@@ -560,7 +568,7 @@ func (s *Server) forwardBatch(pendingBatch batchState) (nextBatch batchState, er
 	}
 
 	if len(batchInputs) == 0 {
-		slog.Log(context.TODO(), logutil.LevelTrace, "forwardBatch no batchInputs, going idle", "batchID", s.batchID)
+		logutil.Trace("forwardBatch no batchInputs, going idle", "batchID", s.batchID)
 		nextBatch.ctx.Close()
 		nextBatch.ctx = nil
 		return
@@ -569,6 +577,7 @@ func (s *Server) forwardBatch(pendingBatch batchState) (nextBatch batchState, er
 
 	// Actual batchInputs values will be injected into the batch.Inputs tensor before calling Compute
 	batch.Inputs = nextBatch.ctx.Input().Empty(ml.DTypeI32, len(batchInputs))
+	batch.Outputs = nextBatch.ctx.Input().FromIntSlice(batchOutputs, len(batchOutputs))
 	nextBatch.modelOutput, err = model.Forward(nextBatch.ctx, s.model, batch)
 	if err != nil {
 		err = fmt.Errorf("failed to build graph: %w", err)
@@ -589,14 +598,14 @@ func (s *Server) computeBatch(activeBatch batchState) {
 	defer activeBatch.ctx.Close()
 
 	// Wait until inputs are ready
-	slog.Log(context.TODO(), logutil.LevelTrace, "computeBatch: waiting for inputs to be ready", "batchID", activeBatch.id)
+	logutil.Trace("computeBatch: waiting for inputs to be ready", "batchID", activeBatch.id)
 	<-activeBatch.inputsReadyCh
-	slog.Log(context.TODO(), logutil.LevelTrace, "computeBatch: inputs are ready", "batchID", activeBatch.id)
+	logutil.Trace("computeBatch: inputs are ready", "batchID", activeBatch.id)
 
 	// Once we complete, signal the next batch of inputs are ready
 	// This will unblock the next computeBatch, or forwardBatch if new seqs come in
 	defer func() {
-		slog.Log(context.TODO(), logutil.LevelTrace, "computeBatch: outputs are ready", "batchID", activeBatch.id)
+		logutil.Trace("computeBatch: outputs are ready", "batchID", activeBatch.id)
 		activeBatch.outputsReadyCh <- struct{}{}
 	}()
 
@@ -626,7 +635,7 @@ func (s *Server) computeBatch(activeBatch batchState) {
 		// Detect if the sequence we're processing has already been completed and replaced
 		// with a new sequence
 		if seq != activeBatch.seqs[i] {
-			slog.Log(context.TODO(), logutil.LevelTrace, "computeBatch: sequence replaced, discarding its results", "batchID", activeBatch.id, "seqIdx", i)
+			logutil.Trace("computeBatch: sequence replaced, discarding its results", "batchID", activeBatch.id, "seqIdx", i)
 			continue
 		}
 
@@ -666,18 +675,19 @@ func (s *Server) computeBatch(activeBatch batchState) {
 	activeBatch.batch.Inputs.SetValueFromIntSlice(batchInputs)
 	activeBatch.ctx.ComputeWithNotify(
 		func() {
-			slog.Log(context.TODO(), logutil.LevelTrace, "computeBatch: signaling computeStartedCh", "batchID", activeBatch.id)
+			logutil.Trace("computeBatch: signaling computeStartedCh", "batchID", activeBatch.id)
 			activeBatch.computeStartedCh <- struct{}{}
 		},
 		activeBatch.modelOutput)
-	logits := activeBatch.modelOutput.Floats()
 
-	slog.Log(context.TODO(), logutil.LevelTrace, "computeBatch: logits ready", "batchID", activeBatch.id)
+	outputs := activeBatch.modelOutput.Floats()
+
+	logutil.Trace("computeBatch: logits ready", "batchID", activeBatch.id)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	slog.Log(context.TODO(), logutil.LevelTrace, "computeBatch: decoding", "batchID", activeBatch.id)
+	logutil.Trace("computeBatch: decoding", "batchID", activeBatch.id)
 	for i, seq := range s.seqs {
 		if seq == nil || nextBatchTokens[i] == nil {
 			continue
@@ -689,16 +699,15 @@ func (s *Server) computeBatch(activeBatch batchState) {
 
 		// if done processing the prompt, generate an embedding and return
 		if seq.embeddingOnly {
-			// TODO(jessegross): Embedding support
-			slog.Warn("generation of embedding outputs not yet supported", "id", activeBatch.id, "seqIdx", i)
+			seq.embedding <- outputs
 			s.removeSequence(i, llm.DoneReasonStop)
 			continue
 		}
 
 		// sample a token
-		vocabSize := len(logits) / len(activeBatch.batch.Outputs)
-		slog.Log(context.TODO(), logutil.LevelTrace, "computeBatch: vocab details", "batchID", activeBatch.id, "seqIdx", i, "len(logits)", len(logits), "len(activeBatch.batch.Outputs)", len(activeBatch.batch.Outputs), "vocabSize", vocabSize, "iBatches", iBatches)
-		token, err := seq.sampler.Sample(logits[iBatches[i]*vocabSize : (iBatches[i]+1)*vocabSize])
+		vocabSize := len(outputs) / activeBatch.batch.Outputs.Dim(0)
+		logutil.Trace("computeBatch: vocab details", "batchID", activeBatch.id, "seqIdx", i, "len(logits)", len(outputs), "len(activeBatch.batch.Outputs)", activeBatch.batch.Outputs.Dim(0), "vocabSize", vocabSize, "iBatches", iBatches)
+		token, err := seq.sampler.Sample(outputs[iBatches[i]*vocabSize : (iBatches[i]+1)*vocabSize])
 		if err != nil {
 			s.hardErrCh <- fmt.Errorf("failed to sample token: %w", err)
 			return
@@ -711,7 +720,7 @@ func (s *Server) computeBatch(activeBatch batchState) {
 			// TODO (jmorganca): we should send this back
 			// as it's important for the /api/generate context
 			// seq.responses <- piece
-			slog.Log(context.TODO(), logutil.LevelTrace, "computeBatch: EOS", "batchID", activeBatch.id, "seqIdx", i)
+			logutil.Trace("computeBatch: EOS", "batchID", activeBatch.id, "seqIdx", i)
 			s.removeSequence(i, llm.DoneReasonStop)
 			continue
 		}
@@ -834,7 +843,7 @@ func (s *Server) completion(w http.ResponseWriter, r *http.Request) {
 	found := false
 	for i, sq := range s.seqs {
 		if sq == nil {
-			seq.cache, seq.inputs, err = s.cache.LoadCacheSlot(seq.inputs)
+			seq.cache, seq.inputs, err = s.cache.LoadCacheSlot(seq.inputs, true)
 			if err != nil {
 				s.mu.Unlock()
 				s.seqsSem.Release(1)
@@ -887,6 +896,67 @@ func (s *Server) completion(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+}
+
+func (s *Server) embeddings(w http.ResponseWriter, r *http.Request) {
+	if pooling.Type(s.model.Backend().Config().Uint("pooling_type")) == pooling.TypeNone {
+		http.Error(w, "this model does not support embeddings", http.StatusNotImplemented)
+		return
+	}
+
+	var req llm.EmbeddingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("bad request: %s", err), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	seq, err := s.NewSequence(req.Content, nil, NewSequenceParams{embedding: true})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to create new sequence: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.seqsSem.Acquire(r.Context(), 1); err != nil {
+		if errors.Is(err, context.Canceled) {
+			slog.Info("aborting embedding request due to client closing the connection")
+		} else {
+			http.Error(w, fmt.Sprintf("failed to acquire semaphore: %v", err), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	s.mu.Lock()
+	found := false
+	for i, sq := range s.seqs {
+		if sq == nil {
+			seq.cache, seq.inputs, err = s.cache.LoadCacheSlot(seq.inputs, false)
+			if err != nil {
+				s.mu.Unlock()
+				s.seqsSem.Release(1)
+				http.Error(w, fmt.Sprintf("failed to load cache: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			s.seqs[i] = seq
+			s.cond.Signal()
+			found = true
+			break
+		}
+	}
+	s.mu.Unlock()
+
+	if !found {
+		s.seqsSem.Release(1)
+		http.Error(w, "could not find an available sequence", http.StatusInternalServerError)
+		return
+	}
+
+	if err := json.NewEncoder(w).Encode(&llm.EmbeddingResponse{
+		Embedding: <-seq.embedding,
+	}); err != nil {
+		http.Error(w, fmt.Sprintf("failed to encode response: %v", err), http.StatusInternalServerError)
 	}
 }
 
@@ -978,12 +1048,8 @@ func (s *Server) reserveWorstCaseGraph() error {
 		batch.Positions[i] = int32(i)
 	}
 
-	batch.Outputs = make([]int32, s.parallel)
-	for i := range batch.Outputs {
-		batch.Outputs[i] = int32(i)
-	}
-
 	batch.Inputs = ctx.Input().FromIntSlice(batchInputs, len(batchInputs))
+	batch.Outputs = ctx.Input().Empty(ml.DTypeI32, s.parallel)
 
 	cache := s.model.Config().Cache
 	if cache != nil {
@@ -1017,9 +1083,13 @@ func (s *Server) allocModel(
 	// Convert memory allocation panics to errors
 	defer func() {
 		if r := recover(); r != nil {
-			debug.PrintStack()
 			if err, ok := r.(error); ok {
-				panicErr = err
+				var noMem ml.ErrNoMem
+				if errors.As(err, &noMem) {
+					panicErr = noMem
+				} else {
+					panic(r)
+				}
 			} else {
 				panic(r)
 			}
@@ -1206,10 +1276,7 @@ func Execute(args []string) error {
 	mux := http.NewServeMux()
 	// TODO: support embeddings
 	mux.HandleFunc("POST /load", server.load)
-	mux.HandleFunc("POST /embedding", func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "this model does not support embeddings", http.StatusNotImplemented)
-	})
-
+	mux.HandleFunc("POST /embedding", server.embeddings)
 	mux.HandleFunc("POST /completion", server.completion)
 	mux.HandleFunc("GET /health", server.health)
 

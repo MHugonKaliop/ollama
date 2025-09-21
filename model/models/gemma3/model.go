@@ -16,7 +16,7 @@ import (
 
 type Model struct {
 	model.Base
-	model.SentencePieceModel
+	model.SentencePiece
 
 	*VisionModel `gguf:"v"`
 	*TextModel
@@ -55,7 +55,7 @@ func (p *MultiModalProjector) Forward(ctx ml.Context, visionOutputs ml.Tensor, i
 
 func New(c fs.Config) (model.Model, error) {
 	m := Model{
-		SentencePieceModel: model.NewSentencePieceModel(
+		SentencePiece: model.NewSentencePiece(
 			&model.Vocabulary{
 				Values: c.Strings("tokenizer.ggml.tokens"),
 				Scores: c.Floats("tokenizer.ggml.scores"),
@@ -141,12 +141,11 @@ func (m *Model) PostTokenize(inputs []*input.Input) ([]*input.Input, error) {
 }
 
 func (m *Model) Forward(ctx ml.Context, batch input.Batch) (ml.Tensor, error) {
-	positions := ctx.Input().FromIntSlice(batch.Positions, len(batch.Positions))
-	outputs := ctx.Input().FromIntSlice(batch.Outputs, len(batch.Outputs))
-
-	return m.TextModel.Forward(ctx, batch.Inputs, positions, outputs, batch, m.Cache), nil
+	hiddenStates := m.TextModel.Forward(ctx, batch, m.Cache)
+	return m.Output.Forward(ctx, hiddenStates), nil
 }
 
 func init() {
 	model.Register("gemma3", New)
+	model.Register("gemma3_embed", newEmbedModel)
 }
