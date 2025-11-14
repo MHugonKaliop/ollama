@@ -1892,15 +1892,13 @@ func (s *Server) ChatHandler(c *gin.Context) {
 		return
 	}
 
-<<<<<<< HEAD
 	// Set the model name in New Relic
 	if tx := newrelic.FromContext(c.Request.Context()); tx != nil {
 		tx.AddAttribute("model.name", req.Model)
-=======
+	}
 	if req.TopLogprobs < 0 || req.TopLogprobs > 20 {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "top_logprobs must be between 0 and 20"})
 		return
->>>>>>> main
 	}
 
 	// expire the runner
