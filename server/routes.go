@@ -348,7 +348,7 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 		builtinParser = parsers.ParserForName(m.Config.Parser)
 		if builtinParser != nil {
 			// no tools or last message for generate endpoint
-			builtinParser.Init(nil, nil)
+			builtinParser.Init(nil, nil, req.Think)
 		}
 	}
 
@@ -2064,7 +2064,7 @@ func (s *Server) ChatHandler(c *gin.Context) {
 				lastMessage = &msgs[len(msgs)-1]
 			}
 			// Initialize parser and get processed tools
-			processedTools = builtinParser.Init(req.Tools, lastMessage)
+			processedTools = builtinParser.Init(req.Tools, lastMessage, req.Think)
 		}
 	}
 
