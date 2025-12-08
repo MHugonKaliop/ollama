@@ -270,6 +270,12 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 			slog.Warn("embedded messages in the model not supported with '/api/generate'; try '/api/chat' instead")
 		}
 
+		contentType := "application/x-ndjson"
+		if req.Stream != nil && !*req.Stream {
+			contentType = "application/json; charset=utf-8"
+		}
+		c.Header("Content-Type", contentType)
+
 		fn := func(resp api.GenerateResponse) error {
 			resp.Model = origModel
 			resp.RemoteModel = m.Config.RemoteModel
@@ -310,12 +316,6 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-
-		contentType := "application/json; charset=utf-8"
-		if req.Stream != nil && *req.Stream {
-			contentType = "application/x-ndjson"
-		}
-		c.Header("Content-Type", contentType)
 
 		return
 	}
@@ -1952,6 +1952,12 @@ func (s *Server) ChatHandler(c *gin.Context) {
 			}
 		}
 
+		contentType := "application/x-ndjson"
+		if req.Stream != nil && !*req.Stream {
+			contentType = "application/json; charset=utf-8"
+		}
+		c.Header("Content-Type", contentType)
+
 		fn := func(resp api.ChatResponse) error {
 			resp.Model = origModel
 			resp.RemoteModel = m.Config.RemoteModel
@@ -1992,12 +1998,6 @@ func (s *Server) ChatHandler(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-
-		contentType := "application/json; charset=utf-8"
-		if req.Stream != nil && *req.Stream {
-			contentType = "application/x-ndjson"
-		}
-		c.Header("Content-Type", contentType)
 
 		return
 	}
